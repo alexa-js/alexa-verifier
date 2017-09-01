@@ -1,10 +1,10 @@
-var crypto = require('crypto')
-var fetchCert = require('./fetch-cert')
-var request = require('request')
-var url = require('url')
-var validator = require('validator')
+var crypto          = require('crypto')
+var fetchCert       = require('./fetch-cert')
+var request         = require('request')
+var url             = require('url')
+var validateCert    = require('./validate-cert')
 var validateCertUri = require('./validate-cert-uri')
-var validateCert = require('./validate-cert')
+var validator       = require('validator')
 
 
 // constants
@@ -15,7 +15,7 @@ function getCert(cert_url, callback) {
   var options = { url: url.parse(cert_url) }
   var result = validateCertUri(options.url)
   if (result !== true) {
-    return callback(result)
+    return process.nextTick(callback, result)
   }
 
   fetchCert(options, function(er, pem_cert) {
@@ -23,31 +23,29 @@ function getCert(cert_url, callback) {
       return callback(er)
     }
 
-    validateCert(pem_cert, function(er) {
-      if (er) {
-        return callback(er)
-      }
-      callback(er, pem_cert)
-    })
+    er = validateCert(pem_cert)
+    if (er) {
+      return callback(er)
+    }
+
+    callback(er, pem_cert)
   })
 }
 
 
 // returns true if the signature for the request body is valid, false otherwise
-function validateSignature(pem_cert, signature, requestBody) {
-  var verifier
-  verifier = crypto.createVerify('RSA-SHA1')
-  verifier.update(requestBody)
+function isValidSignature(pem_cert, signature, requestBody) {
+  var verifier = crypto.createVerify('RSA-SHA1')
+  verifier.update(requestBody, 'utf8')
   return verifier.verify(pem_cert, signature, SIGNATURE_FORMAT)
 }
 
 
 // determine if a timestamp is valid for a given request with a tolerance of
 // TIMESTAMP_TOLERANCE seconds
-// returns null if valid, or an error string otherwise
+// returns undefined if valid, or an error string otherwise
 function validateTimestamp(requestBody) {
   var d, e, error, now, oldestTime, request_json
-  request_json = null
   try {
     request_json = JSON.parse(requestBody)
   } catch (error) {
@@ -63,42 +61,39 @@ function validateTimestamp(requestBody) {
   if (d.getTime() < oldestTime) {
     return 'Request is from more than ' + TIMESTAMP_TOLERANCE + ' seconds ago'
   }
-  return null
 }
 
 
 // certificate validator express middleware for amazon echo
 module.exports = function verifier(cert_url, signature, requestBody, callback) {
   var er
-  if (cert_url == null) {
-    cert_url = ''
+
+  if(!cert_url) {
+    return process.nextTick(callback, 'missing certificate url')
   }
-  if (signature == null) {
-    signature = ''
+
+  if (!signature) {
+    return process.nextTick(callback, 'missing signature')
   }
-  if (requestBody == null) {
-    requestBody = ''
+  if (!requestBody) {
+    return process.nextTick(callback, 'missing request (certificate) body')
   }
-  if (callback == null) {
-    callback = function() {}
-  }
+
   if (!validator.isBase64(signature)) {
-    return callback('signature is not base64 encoded')
+    return process.nextTick(callback, 'invalid signature (not base64 encoded)')
   }
   er = validateTimestamp(requestBody)
 
   if (er) {
-    return callback(er)
+    return process.nextTick(callback, er)
   }
 
   getCert(cert_url, function(er, pem_cert) {
-    var success
     if (er) {
       return callback(er)
     }
-    success = validateSignature(pem_cert, signature, requestBody)
-    if (success !== true) {
-      return callback('certificate verification failed')
+    if (!isValidSignature(pem_cert, signature, requestBody)) {
+      return callback('invalid signature')
     }
     callback()
   })

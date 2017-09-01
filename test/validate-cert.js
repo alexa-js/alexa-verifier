@@ -1,24 +1,11 @@
-var test = require('tap').test
-var url = require('url')
-var validateCert = require('../validate-cert')
-var request = require('request')
+var fs       = require('fs')
+var pki      = require('node-forge').pki
+var test     = require('tap').test
+var url      = require('url')
+var validate = require('../validate-cert')
 
-
-var oldCertUrl = 'https://s3.amazonaws.com/echo.api/echo-api-cert.pem'
-
-var latestCertUrl = 'https://s3.amazonaws.com/echo.api/echo-api-cert-4.pem'
-
-function getEchoCert(certUrl, callback) {
-  request(certUrl, function(err, res, body){
-    callback(body)
-  })
-}
 
 function createInvalidCert() {
-  // From node-forge documentation
-  var forge = require('node-forge')
-  var pki = forge.pki
-
   var keys = pki.rsa.generateKeyPair(512)
   var cert = pki.createCertificate()
   cert.publicKey = keys.publicKey
@@ -93,40 +80,28 @@ function createInvalidCert() {
   // self-sign certificate
   cert.sign(keys.privateKey)
 
-  var pem = pki.certificateToPem(cert)
-  return pem
+  return pki.certificateToPem(cert)
 }
 
 test('fails on invalid pem cert parameter', function(t) {
-  validateCert(null, function(er) {
-    t.assert(er !== null, 'Errot should have been thrown')
-    t.end()
-  })
+  t.assert(validate(undefined) !== undefined, 'Error should have been thrown')
+  t.end()
 })
 
-test('fails on non amazon subject common name', function(t) {
+test('fails on non amazon subject alt name', function(t) {
   var pem = createInvalidCert()
-
-  validateCert(pem, function(er) {
-    t.assert(er === 'subjectAltName Check Failed', 'Certificate must be from amazon')
-    t.end()
-  })
+  t.assert(validate(pem) === 'invalid certificate validity (correct domain not found in subject alternative names)', 'Certificate must be from amazon')
+  t.end()
 })
 
-test('fails on expired certificate', function(t) {
-  getEchoCert(oldCertUrl, function(pem) {
-    validateCert(pem, function(er) {
-      t.assert(er === 'certificate expiration check failed', 'Certificate is expired')
-      t.end()
-    })
-  })
+test('fails on expired certificate (Not After)', function(t) {
+  var pem = fs.readFileSync(__dirname + '/cert-expired.pem')
+  t.assert(validate(pem) === 'invalid certificate validity (past expired date)')
+  t.end()
 })
 
 test('approves valid certifcate', function(t) {
-  getEchoCert(latestCertUrl, function(pem) {
-    validateCert(pem, function(er) {
-      t.assert(!er, 'Certificate should be valid')
-      t.end()
-    })
-  })
+  var pem = fs.readFileSync(__dirname + '/cert-latest.pem')
+  t.assert(validate(pem) === undefined, 'Certificate should be valid')
+  t.end()
 })
